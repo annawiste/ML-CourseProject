@@ -1,0 +1,96 @@
+
+
+##Applied Machine Learning
+##Course Project
+##Author - AW
+
+
+##Predicting quality of weight-lifting exercise from human activity recognition data.
+
+###The aim is to develop a prediction tool which correctly classifies how individuals are performing exercises.
+
+####Data Structure - The training set contains data from 6 individuals. Each performing 10 reps of a bicep curl, in 5 different methods taught to them by the research team. Each observation is all the readings from a particular time window at each of the four sensors. Sensors are on the belt, the weight, the forearm and arm. The subject name and time stamp are included in the dataset as well as raw and derived features from the sensors 
+
+####The first step is to read in the data and adjust to have just the correct predictors.
+```{r, cache=TRUE, message=F, warning=F}
+library("dplyr")
+PMLTrain<-read.csv("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na.strings=c("#DIV/0!"), as.is=TRUE)
+PMLTest<-read.csv("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", na.strings=c("#DIV/0!"), as.is=TRUE)
+
+#Remove observations with values derived over several windows.Test observations are individual points, not summary windows. 
+PMLTrain_n<-subset(PMLTrain, new_window=="no")
+#create separate factor with class
+y_Train<-as.factor(as.vector(t(PMLTrain_n[,160])))
+#Remove the derived variables (eg. those which are now all NA)
+notNas <- !(is.na(PMLTrain_n[1,]))
+PMLTrain_2 <- PMLTrain_n[,notNas]
+isChar <- unlist(lapply(PMLTrain_2[1,],is.character))
+PMLTrain_3 <- PMLTrain_2[!isChar]
+PMLTrainf<-PMLTrain_3[,-c(1:4)]
+#Predictors with class
+Trainf<-cbind(PMLTrainf, y_Train)
+
+##Prepare test observations
+id<-PMLTest$problem_id
+notNas <- !(is.na(PMLTest[1,]))
+PMLTest_2 <- PMLTest[,notNas]
+isChar <- unlist(lapply(PMLTest_2[1,],is.character))
+PMLTest_3 <- PMLTest_2[!isChar]
+PMLTestf<-PMLTest_3[,-c(1:4,57)]
+
+```
+
+###Now the model. 
+####Two features of this problem stand out. It is a multiclass classification problem, and there is likely to be a great deal of reduncdancy amongst the predictors because the data is all derived from the same source, 52 features from 3 sensors. 
+
+####Checking the correlations. 
+```{r}
+cor<-cor(PMLTrainf)
+cor1<-cor[cor>0.6]
+length(cor1)/2
+```
+####There are 54 pairwise correlations greater than 0.6 among the predictors. Feature selection prior to or as part of the model building is necessary.
+####To maintain all the information available but allow a more managable computation time, first prune the number of features based on pair-wise correlations. Subsetted from Trainf because this includes the outcome factor as well.
+
+####This cut maintainsall the variability, not excluding smaller, independent contributions, But it also then prohibits much interpretation of which variables are most important. Other more important variables could have been excluded.
+####However, the task is classification, and building an efficient, accurate classifier will be helped by trimming the input
+
+```{r, message=F, warning=F}
+library("caret")
+drop<-findCorrelation(cor, cutoff=0.6, exact=TRUE)
+Traind<-PMLTrainf[,-drop]
+Testd<-PMLTestf[,-drop]
+
+```
+
+####Few methods are good for multiclass classification, and random Forest will be a good option. Because we have our test set, I did not split the data. 
+####1. resampling- I chose 5 fold cross-validation to get a fair estimate of the model's performance
+####2. Tuning parameter - 'mtry' is the number of variables sampled at each split in building the tree. The model will take a long time to run regardless, so I want to limit the time and target the search where possible. Rather than random search I set it to go from 6 to 24 by 3. So 6 possibilities, but limited over the most likely candidates.
+####3. Scaling - Added the preprocessing step of scaling the features, to reduce possibility of features with different scales having larger influence. All these features should be equivalent in influence. 
+####4. Number of trees-estimated by modeling without cv, tracing oob error rate as trees are added. By 200 trees error rate had bottomed out. Increasing further is not helpful. 
+
+```{r, cache=TRUE, message=F, warning=F}
+library("randomForest")
+
+ntree<-randomForest(Traind, y_Train, do.trace=25, ntree=200, mtry=10)
+
+set.seed(2435)
+ctrl<-trainControl(method="cv", number=5)
+RF<-train(Traind, y_Train, method="rf", preProcess="scale", ntree=200, tuneLength=5, trControl=ctrl)
+```
+
+###Accuracy was very high across the range of values for mtry, 2 is highest though at 98.7% accuracy.
+###While oob esimated error rate is 1.16%. 
+####Individual class error rates range from 0.2% to 2.7% indicating all classes are being estimated well. 
+
+```{r}
+RF
+RF$finalModel
+```
+
+###Now we'll predict class membership for the 20 test observations
+```{r}
+
+pred<-predict(RF, Testd)
+pred
+```
